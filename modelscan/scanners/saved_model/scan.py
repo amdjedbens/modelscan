@@ -39,6 +39,9 @@ class SavedModelScan(ScanBase):
         if dep_error:
             return ScanResults([], [dep_error])
 
+        if not self._is_model_protobuff(source, data):
+            return None
+
         if data:
             results = self._scan(source, data)
 
@@ -52,6 +55,13 @@ class SavedModelScan(ScanBase):
             return None
 
     def _scan(self, source: Union[str, Path], data: IO[bytes]) -> Optional[ScanResults]:
+        raise NotImplementedError
+
+    def _is_model_protobuff(
+        self,
+        source: Union[str, Path],
+        data: Optional[IO[bytes]],
+    ) -> bool:
         raise NotImplementedError
 
     # This function checks for malicious operators in both Keras and Tensorflow
@@ -128,6 +138,26 @@ class SavedModelLambdaDetectScan(SavedModelScan):
             self._settings["scanners"][self.full_name()]["unsafe_keras_operators"],
         )
 
+    def _is_model_protobuff(
+        self, source: Union[str, Path], data: Optional[IO[bytes]]
+    ) -> bool:
+        if not data:
+            data = open(source, "rb")
+
+        header_bytes = data.read(20)
+
+        is_model = False
+        try:
+            keras_header = header_bytes[12:]
+            utf8_str = keras_header.decode("utf-8")
+            if utf8_str == "tf_keras":
+                is_model = True
+        except Exception as e:
+            is_model = False
+
+        data.seek(0)
+        return is_model
+
     @staticmethod
     def _get_keras_pb_operator_names(
         data: IO[bytes], source: Union[str, Path]
@@ -175,6 +205,22 @@ class SavedModelTensorflowOpScan(SavedModelScan):
             source,
             self._settings["scanners"][self.full_name()]["unsafe_tf_operators"],
         )
+
+    def _is_model_protobuff(
+        self, source: Union[str, Path], data: Optional[IO[bytes]]
+    ) -> bool:
+        if not data:
+            data = open(source, "rb")
+
+        tensorflow_header = [b"\x08"]
+        header_bytes = data.read(1)
+
+        is_model = False
+        if header_bytes in tensorflow_header:
+            is_model = True
+
+        data.seek(0)
+        return is_model
 
     def _get_tensorflow_operator_names(self, data: IO[bytes]) -> List[str]:
         saved_model = SavedModel()
